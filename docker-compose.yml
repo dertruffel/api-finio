@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  finio-postgres:
+    image: postgres:14-alpine
+    container_name: 'finio-postgres'
+    environment:
+      POSTGRES_USER: 'postgres'
+      POSTGRES_PASSWORD: 'postgres'
+      POSTGRES_DB: 'finio'
+    labels:
+      application: 'finio-postgres'
+    ports:
+      - '5436'
+    expose:
+      - '5436'
+    command: -p 5436
+
+  finio-django:
+    build:
+      context: ./
+    command: "gunicorn config.asgi:application -k uvicorn.workers.UvicornWorker --chdir=src --bind 0.0.0.0:8070 --reload --log-file - "
+    container_name: 'finio-django'
+    labels:
+      application: 'finio-django'
+    volumes:
+      - ./:/code
+    ports:
+      - '8070:8070'
+    depends_on:
+      - finio-postgres
+    expose:
+      - '8070'
+    environment: &env
+      DEBUG: 'True'
+      ALLOWED_HOSTS: '*'
+      SECRET_KEY: 'SECRET_KEY'
+      DATABASE_URL: 'postgres://postgres:postgres@finio-postgres:5436/finio'
+      REDIS_URL: 'redis://finio-redis:6340/1'
+      DEEPL_API_KEY: ''
+
+
+  finio-redis:
+    image: redis:latest
+    container_name: 'finio-redis'
+    labels:
+      application: 'finio-redis'
+    ports:
+      - '6340:6340'
+    expose:
+      - '6340'
+    command: redis-server --port 6340
+
+  finio-celery:
+    build:
+      context: ./
+    command: celery -A config worker -l info
+    container_name: 'finio-celery'
+    restart: always
+    labels:
+      application: 'finio-celery'
+    volumes:
+      - ./:/code
+    working_dir: /code/src/
+    depends_on:
+      - finio-postgres
+      - finio-redis
+      - finio-django
+    environment: *env
+
+  finio-celery-beat:
+    build:
+      context: ./
+    command: celery -A config beat -l info
+    container_name: 'finio-celery-beat'
+    restart: always
+    labels:
+      application: 'finio-celery-beat'
+    volumes:
+      - ./:/code
+    working_dir: /code/src/
+    depends_on:
+      - finio-postgres
+      - finio-redis
+      - finio-celery
+    environment: *env
+
+  finio-celery-flower:
+    build:
+      context: ./
+    command: celery -A config flower --port=5556
+    container_name: 'finio-celery-flower'
+    restart: always
+    labels:
+      application: 'finio-celery-flower'
+    volumes:
+      - ./:/code
+    working_dir: /code/src/
+    depends_on:
+      - finio-postgres
+      - finio-redis
+      - finio-celery
+    ports:
+      - '5556:5556'
+    environment: *env
